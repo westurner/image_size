@@ -37,14 +37,30 @@ PNG = types['PNG'] = 'PNG'
 TIFF = types['TIFF'] = 'TIFF'
 
 image_fields = ['path', 'type', 'file_size', 'width', 'height',
-                'st_ctime', 'st_mtime', 'st_atime']
+                'st_ctime', 'st_mtime', 'st_atime',
+                'err']
 
 
 class Image(collections.namedtuple('Image', image_fields)):
+    _TEST_FIELDS = [f for f in image_fields if f not in
+                    ['st_ctime', 'st_mtime', 'st_atime', 'err']]
 
     @classmethod
     def from_file(cls, *args, **kwargs):
         return get_image_metadata(*args, **kwargs)
+
+    def to_csv_row(self):
+        return [getattr(self, attr) for attr in self._fields]
+        return [
+            self.width,
+            self.height,
+            self.file_size,
+            self.type,
+            self.st_atime,
+            self.st_mtime,
+            self.st_ctime,
+            self.path,
+            self.err]
 
     def to_str_row(self):
         return ("%d\t%d\t%d\t%s\t%r\t%r\t%r\t%s" % (
@@ -320,7 +336,8 @@ def _get_image_metadata(fileobj, file_path=None,
                  height=height,
                  st_ctime=st_ctime,
                  st_mtime=st_mtime,
-                 st_atime=st_atime)
+                 st_atime=st_atime,
+                 err=None)
 
 
 import unittest
@@ -346,9 +363,8 @@ class Test_get_image_size(unittest.TestCase):
         self.assertEqual(output.height, img['height'])
         self.assertEqual(output.type, img['type'])
         self.assertEqual(output.file_size, img['file_size'])
-        for field in image_fields:
-            if field not in ['st_ctime', 'st_mtime', 'st_atime']:
-                self.assertEqual(getattr(output, field), img[field])
+        for field in Image._TEST_FIELDS:
+            self.assertEqual(getattr(output, field), img[field])
 
     def test_get_image_metadata__Image__from_file(self):
         img = self.data[0]
@@ -359,9 +375,8 @@ class Test_get_image_size(unittest.TestCase):
         self.assertEqual(output.height, img['height'])
         self.assertEqual(output.type, img['type'])
         self.assertEqual(output.file_size, img['file_size'])
-        for field in image_fields:
-            if field not in ['st_ctime', 'st_mtime', 'st_atime']:
-                self.assertEqual(getattr(output, field), img[field])
+        for field in Image._TEST_FIELDS:
+            self.assertEqual(getattr(output, field), img[field])
 
     def test_get_image_metadata__fileobj(self):
         img = self.data[0]
@@ -373,9 +388,8 @@ class Test_get_image_size(unittest.TestCase):
             self.assertEqual(output.height, img['height'])
             self.assertEqual(output.type, img['type'])
             self.assertEqual(output.file_size, img['file_size'])
-            for field in image_fields:
-                if field not in ['st_ctime', 'st_mtime', 'st_atime']:
-                    self.assertEqual(getattr(output, field), img[field])
+            for field in Image._TEST_FIELDS:
+                self.assertEqual(getattr(output, field), img[field])
 
     def test_get_image_metadata__ENOENT_OSError(self):
         with self.assertRaises((IOError, OSError)):
@@ -415,6 +429,17 @@ def main(argv=None):
         description="Print metadata for the given image paths "
                     "(without image library bindings).")
 
+    prs.add_option('--csv',
+                   dest='csv',
+                   action='store_true',
+                   default=True,
+                   help=(
+                   'Output as CSV (Comma-Separated-Values)'))
+    prs.add_option('--tsv',
+                   dest='tsv',
+                   action='store_true',
+                   help=(
+                   'Output as TSV (Tab-Separated-Values)'))
     prs.add_option('--json',
                    dest='json',
                    action='store_true')
@@ -451,43 +476,75 @@ def main(argv=None):
         import unittest
         return unittest.main()
 
-    output_func = Image.to_str_row
+    import csv
+    DELIMITER = ','
+    if opts.tsv:
+        DELIMITER = '\t'
+    cw = csv.writer(sys.stdout,
+                    quoting=csv.QUOTE_NONNUMERIC,
+                    delimiter=DELIMITER)
+    def print_xsv_img_row(img):
+        cw.writerow(img.to_csv_row())
+
+    if any((opts.csv, opts.tsv)):
+        output_func = print_xsv_img_row
     if opts.json_indent:
         import functools
         output_func = functools.partial(Image.to_str_json, indent=2)
     elif opts.json:
         output_func = Image.to_str_json
     elif opts.verbose:
-        output_func = Image.to_str_row_verbose
+        def output_func(img):
+            log.debug(('img', img))
+            return Image.to_str_row_verbose(img)
+        output_func = output_func
+    else:
+        output_func = print_xsv_img_row
 
     EX_OK = 0
-    EX_NOT_OK = 2
+    EX_ERR_ = 2
 
     if len(args) < 1:
         prs.print_help()
         print('')
         prs.error("You must specify one or more paths to image files")
 
+    img = None
+    imgpaths = args
     errors = []
-    for path_arg in args:
+    for imgpath in imgpaths:
         try:
-            img = get_image_metadata(path_arg)
-            print(output_func(img))
+            img = get_image_metadata(imgpath)
         except KeyboardInterrupt:
             raise
         except OSError as e:
-            log.error((path_arg, e))
-            errors.append((path_arg, e))
+            _imgdict = dict.fromkeys(Image._fields).update({
+                'path': imgpath,
+                'err': repr(e)})
+            img = Image(**_imgdict)
+            log.error((imgpath, e))
+            errors.append((imgpath, e))
         except Exception as e:
+            _imgdict = dict.fromkeys(Image._fields)
+            _imgdict.update({
+                'path': imgpath,
+                'err': repr(e)})
+            img = Image(**_imgdict)
             log.exception(e)
-            errors.append((path_arg, e))
+            errors.append((imgpath, e))
             pass
+        finally:
+            if img:
+                output = output_func(img)
+                if output is not None:
+                    print(output)
     if len(errors):
-        import pprint
-        print("ERRORS", file=sys.stderr)
-        print("======", file=sys.stderr)
-        print(pprint.pformat(errors, indent=2), file=sys.stderr)
-        return EX_NOT_OK
+        if opts.verbose:
+            import pprint
+            print("ERRORS", file=sys.stderr)
+            print("======", file=sys.stderr)
+            print(pprint.pformat(errors, indent=2), file=sys.stderr)
+        return EX_ERR_
     return EX_OK
 
 
