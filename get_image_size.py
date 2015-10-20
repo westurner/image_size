@@ -83,27 +83,73 @@ def get_image_size(file_path):
     return (img.width, img.height)
 
 
-def get_image_metadata(fileobj, file_path=None, size=None):
-    if hasattr(fileobj, 'fileno'):
-        return _get_image_metadata(fileobj, file_path=file_path, size=size)
-    else:
-        with open(fileobj, "rb") as input:
-            return _get_image_metadata(
-                input,
-                file_path=file_path if file_path is not None else fileobj,
-                size=size)
-
-
-def _get_image_metadata(fileobj, file_path=None, size=None):
+def get_image_metadata(fileobj, file_path=None, **kwargs):
     """
-    Return an `Image` object for a given img file content - no external
-    dependencies except the os and struct builtin modules
+    Infer whether fileobj is a fileobj or a path that needs to be opened
+    and return an ``Image`` object from
+    ``_get_image_metadata(fileobj, file_path, **kwargs)``.
 
     Args:
-        fileobj (str): path to an image file
+        fileobj (str): an open file object (also specify ``file_path``);
+            or a path to a file to open
+            (``file_path`` will then default to ``fileobj``).
+
+    Keyword Arguments:
+        file_path (str): file path/URI (what fileobj is open to)
+        size (int): file size hint in bytes (default: None (``os.fstat``))
+        ctime (strlike): st_ctime hint (note that ``%f`` rounds; use ``%r``)
+        mtime (strlike): st_mtime hint (note that ``%f`` rounds; use ``%r``)
+        atime (strlike): st_atime hint (note that ``%f`` rounds; use ``%r``)
+
+    Returns:
+        Image: an Image object with metadata from/for the given fileobj.
+
+    Raises:
+        UnknownImageFormat: generic file metadata parse exception
+    """
+    if hasattr(fileobj, 'fileno'):
+        return _get_image_metadata(fileobj, file_path=file_path, **kwargs)
+    else:
+        with open(fileobj, "rb") as input:
+            if file_path is None:
+                file_path = fileobj
+            return _get_image_metadata(
+                input,
+                file_path=file_path,
+                **kwargs)
+
+
+def _get_image_metadata(fileobj, file_path=None,
+                        size=None,
+                        ctime=None,
+                        mtime=None,
+                        atime=None):
+    """
+    Return an `Image` object with metadata about and from
+    the given file object.
+
+    .. note:: This function:
+
+        * must have no external dependencies
+          except for the ``os`` and ``struct`` builtin modules.
+        * does not open ``file_path`` (see: ``get_image_metadata``)
+        * does ``os.fstat(file_path)`` if ``size`` is not specified
+
+    Args:
+        fileobj (str): file object
+
+    Keyword Arguments:
+        file_path (str): file path/URI (what fileobj is open to)
+        size (int): file size hint in bytes (default: None (``os.fstat``))
+        ctime (strlike): st_ctime hint (note that ``%f`` rounds; use ``%r``)
+        mtime (strlike): st_mtime hint (note that ``%f`` rounds; use ``%r``)
+        atime (strlike): st_atime hint (note that ``%f`` rounds; use ``%r``)
 
     Returns:
         Image: (path, type, file_size, width, height)
+
+    Raises:
+        UnknownImageFormat: generic file metadata parse exception
     """
     fstat = None
     if size is None:
@@ -114,7 +160,7 @@ def _get_image_metadata(fileobj, file_path=None, size=None):
         st_mtime = fstat.st_mtime
         st_atime = fstat.st_atime
     else:
-        st_ctime, st_mtime, st_atime = None, None, None
+        st_ctime, st_mtime, st_atime = ctime, mtime, atime
 
     # be explicit with open arguments - we need binary mode
     height = -1
